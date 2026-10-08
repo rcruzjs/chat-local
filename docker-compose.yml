@@ -31,7 +31,7 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server
     restart: unless-stopped
     healthcheck:
-      disable: true
+      disable: true   # o teste embutido da imagem olha a porta errada
     command: >
       -m /models/embed-bge-m3.gguf --embedding --pooling cls
       -c 8192 -b 8192 -ub 8192 -t ${EMBED_THREADS:-6}
@@ -44,7 +44,7 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server
     restart: unless-stopped
     healthcheck:
-      disable: true
+      disable: true   # o teste embutido da imagem olha a porta errada
     command: >
       -m /models/rerank-bge-v2-m3.gguf --reranking
       -c 8192 -b 8192 -ub 8192 -t ${RERANK_THREADS:-4}

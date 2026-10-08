@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState } from "react";
+import Historico from "./Historico";
 
 type Msg = { role: "user" | "assistant"; content: string };
 type Model = { nome: string; papel: string; local: boolean };
 type Health = { ok: boolean; servicos: { servico: string; ok: boolean; ms: number; detalhe: string }[] };
-type Stats = { latencia_ms: number; primeiro_token_ms: number | null; usage?: { completion_tokens?: number } };
+type Stats = {
+  latencia_ms: number;
+  primeiro_token_ms: number | null;
+  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+};
+type Aba = "chat" | "historico";
 
 export default function App() {
+  const [aba, setAba] = useState<Aba>("chat");
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("chat-4b");
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -29,13 +37,23 @@ export default function App() {
     refreshHealth();
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+  // Chaves obrigatórias: o efeito não pode devolver o valor de scrollIntoView
+  // (no Chrome novo ele é uma Promise e o React tentaria chamá-la como limpeza).
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs]);
 
   function refreshHealth() {
     fetch("/api/health")
       .then((r) => r.json())
       .then(setHealth)
       .catch(() => setHealth(null));
+  }
+
+  function novaConversa() {
+    setMsgs([]);
+    setConversationId(null);
+    setStats(null);
   }
 
   async function send() {
@@ -61,7 +79,7 @@ export default function App() {
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, messages: history }),
+        body: JSON.stringify({ model, messages: history, conversation_id: conversationId }),
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -78,6 +96,7 @@ export default function App() {
           const line = ev.trim();
           if (!line.startsWith("data:")) continue;
           const data = JSON.parse(line.slice(5).trim());
+          if (data.conversation_id) setConversationId(data.conversation_id);
           if (data.delta) append(data.delta);
           if (data.error) append(`\n\n[erro] ${data.error}`);
           if (data.done) setStats(data.stats);
@@ -91,18 +110,38 @@ export default function App() {
     }
   }
 
+  const tokIn = stats?.usage?.prompt_tokens;
+  const tokOut = stats?.usage?.completion_tokens;
+  const geracaoMs = stats ? stats.latencia_ms - (stats.primeiro_token_ms ?? 0) : 0;
+
   return (
-    <div className="app">
+    <div className={`app ${aba === "historico" ? "wide" : ""}`}>
       <header>
         <strong>Chat LLM Local</strong>
-        <select value={model} onChange={(e) => setModel(e.target.value)} disabled={busy}>
-          {models.length === 0 && <option value={model}>{model}</option>}
-          {models.map((m) => (
-            <option key={m.nome} value={m.nome}>
-              {m.nome}
-            </option>
-          ))}
-        </select>
+        <nav className="tabs">
+          <button className={aba === "chat" ? "on" : ""} onClick={() => setAba("chat")}>
+            Chat
+          </button>
+          <button className={aba === "historico" ? "on" : ""} onClick={() => setAba("historico")}>
+            Histórico
+          </button>
+        </nav>
+        <span className="spacer" />
+        {aba === "chat" && (
+          <>
+            <select value={model} onChange={(e) => setModel(e.target.value)} disabled={busy}>
+              {models.length === 0 && <option value={model}>{model}</option>}
+              {models.map((m) => (
+                <option key={m.nome} value={m.nome}>
+                  {m.nome}
+                </option>
+              ))}
+            </select>
+            <button onClick={novaConversa} disabled={busy}>
+              Nova conversa
+            </button>
+          </>
+        )}
         <button
           className={`dot ${health ? (health.ok ? "ok" : "bad") : ""}`}
           title="Estado dos serviços"
@@ -112,9 +151,6 @@ export default function App() {
           }}
         >
           ●
-        </button>
-        <button onClick={() => setMsgs([])} disabled={busy}>
-          Nova conversa
         </button>
       </header>
 
@@ -128,48 +164,54 @@ export default function App() {
         </section>
       )}
 
-      <main>
-        {msgs.length === 0 && (
-          <p className="empty">Pergunte algo. Na primeira mensagem o modelo é carregado na GPU e pode demorar.</p>
-        )}
-        {msgs.map((m, i) => (
-          <div key={i} className={`msg ${m.role}`}>
-            {m.content || (busy && i === msgs.length - 1 ? "…" : "")}
-          </div>
-        ))}
-        <div ref={endRef} />
-      </main>
+      {aba === "historico" ? (
+        <Historico />
+      ) : (
+        <>
+          <main>
+            {msgs.length === 0 && (
+              <p className="empty">Pergunte algo. Na primeira mensagem o modelo é carregado na GPU e pode demorar.</p>
+            )}
+            {msgs.map((m, i) => (
+              <div key={i} className={`msg ${m.role}`}>
+                {m.content || (busy && i === msgs.length - 1 ? "…" : "")}
+              </div>
+            ))}
+            <div ref={endRef} />
+          </main>
 
-      {stats && (
-        <div className="stats">
-          primeiro token {stats.primeiro_token_ms ?? "–"} ms · total {stats.latencia_ms} ms
-          {stats.usage?.completion_tokens
-            ? ` · ${(stats.usage.completion_tokens / (stats.latencia_ms / 1000)).toFixed(1)} tokens/s`
-            : ""}
-        </div>
+          {stats && (
+            <div className="stats">
+              1º token {stats.primeiro_token_ms ?? "–"} ms · total {stats.latencia_ms} ms
+              {tokIn !== undefined ? ` · entrada ${tokIn} tokens` : ""}
+              {tokOut !== undefined ? ` · saída ${tokOut} tokens` : ""}
+              {tokOut && geracaoMs > 0 ? ` · ${(tokOut / (geracaoMs / 1000)).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} tokens/s` : ""}
+            </div>
+          )}
+
+          <footer>
+            <textarea
+              value={input}
+              placeholder="Escreva sua mensagem (Enter envia, Shift+Enter quebra linha)"
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              rows={2}
+            />
+            {busy ? (
+              <button onClick={() => abortRef.current?.abort()}>Parar</button>
+            ) : (
+              <button onClick={send} disabled={!input.trim()}>
+                Enviar
+              </button>
+            )}
+          </footer>
+        </>
       )}
-
-      <footer>
-        <textarea
-          value={input}
-          placeholder="Escreva sua mensagem (Enter envia, Shift+Enter quebra linha)"
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          rows={2}
-        />
-        {busy ? (
-          <button onClick={() => abortRef.current?.abort()}>Parar</button>
-        ) : (
-          <button onClick={send} disabled={!input.trim()}>
-            Enviar
-          </button>
-        )}
-      </footer>
     </div>
   );
 }
