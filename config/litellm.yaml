@@ -1,0 +1,50 @@
+# LiteLLM: registro único de modelos. O backend só conhece estes nomes.
+# Para adicionar um modelo: cadastre aqui (e em llm_models no banco), reinicie o gateway.
+
+model_list:
+  - model_name: chat-4b
+    litellm_params:
+      model: openai/chat-4b
+      api_base: http://llm:8080/v1
+      api_key: "local"
+      timeout: 600
+
+  - model_name: chat-8b
+    litellm_params:
+      model: openai/chat-8b
+      api_base: http://llm:8080/v1
+      api_key: "local"
+      timeout: 600
+
+  - model_name: chat-moe-30b
+    litellm_params:
+      model: openai/chat-moe-30b
+      api_base: http://llm:8080/v1
+      api_key: "local"
+      timeout: 900
+
+  - model_name: vision-3b
+    litellm_params:
+      model: openai/vision-3b
+      api_base: http://llm:8080/v1
+      api_key: "local"
+      timeout: 600
+
+  - model_name: embed-bge-m3
+    litellm_params:
+      model: openai/bge-m3
+      api_base: http://embed:8081/v1
+      api_key: "local"
+
+  # --- Nuvem (desativado). Descomente e defina a chave no .env para usar. ---
+  # - model_name: cloud-gemini
+  #   litellm_params:
+  #     model: gemini/gemini-2.5-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 900
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

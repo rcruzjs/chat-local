@@ -1,0 +1,16 @@
+# Copie este arquivo para C:\Users\<seu-usuario>\.wslconfig
+# Depois, no PowerShell:  wsl --shutdown   (e abra o Ubuntu de novo)
+
+[wsl2]
+# Por padrão o WSL usa só metade da RAM. Com 64 GB, liberamos 48 GB
+# (sobram 16 GB para o Windows). Necessário para o modelo MoE com especialistas na RAM.
+memory=48GB
+
+# Núcleos para o WSL. Ajuste ao seu processador (ex.: total de threads menos 2).
+processors=12
+
+swap=16GB
+
+# Rede espelhada (Windows 11): portas do WSL ficam acessíveis pelo Windows
+# e pelo Tailscale instalado no Windows (Sprint 4).
+networkingMode=mirrored

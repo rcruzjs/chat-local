@@ -1,0 +1,153 @@
+# Chat LLM Local — Sprint 0
+# Roda dentro do Ubuntu no WSL2, com Docker Engine + NVIDIA Container Toolkit.
+# Subir:   docker compose up -d --build
+# Parar:   docker compose down
+# Portas publicadas só em 127.0.0.1 (acesso externo via Tailscale entra no Sprint 4).
+
+name: chat-local
+
+services:
+  # ---------- Modelos ----------
+  llm:
+    # llama-swap + llama-server (CUDA). Carrega um modelo grande por vez na GPU de 8 GB.
+    image: ghcr.io/mostlygeek/llama-swap:cuda
+    restart: unless-stopped
+    entrypoint: ["/app/llama-swap", "--config", "/app/config.yaml", "--listen", ":8080"]
+    volumes:
+      - ./config/llama-swap.yaml:/app/config.yaml:ro
+      - ./models:/models:ro
+    ports:
+      - "127.0.0.1:8080:8080"   # UI/teste direto do llama-swap
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  embed:
+    # BGE-M3 na CPU (embeddings 1024 dimensões)
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    command: >
+      -m /models/embed-bge-m3.gguf --embedding --pooling cls
+      -c 8192 -b 8192 -ub 8192 -t ${EMBED_THREADS:-6}
+      --host 0.0.0.0 --port 8081
+    volumes:
+      - ./models:/models:ro
+
+  rerank:
+    # bge-reranker-v2-m3 na CPU
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    command: >
+      -m /models/rerank-bge-v2-m3.gguf --reranking
+      -c 8192 -b 8192 -ub 8192 -t ${RERANK_THREADS:-4}
+      --host 0.0.0.0 --port 8082
+    volumes:
+      - ./models:/models:ro
+
+  gateway:
+    # LiteLLM: uma API compatível com OpenAI para todos os modelos (locais ou nuvem)
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ./config/litellm.yaml:/app/config.yaml:ro
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      - llm
+      - embed
+
+  # ---------- Dados ----------
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-chatlocal}
+      POSTGRES_USER: ${POSTGRES_USER:-chatlocal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chatlocal} -d ${POSTGRES_DB:-chatlocal}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # ---------- Aplicação ----------
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-chatlocal}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-chatlocal}
+      REDIS_URL: redis://redis:6379/0
+      LITELLM_URL: http://gateway:4000
+      EMBED_URL: http://embed:8081
+      RERANK_URL: http://rerank:8082
+      LLM_SWAP_URL: http://llm:8080
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - filesdata:/data/files
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["arq", "app.worker.WorkerSettings"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-chatlocal}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-chatlocal}
+      REDIS_URL: redis://redis:6379/0
+      LITELLM_URL: http://gateway:4000
+      EMBED_URL: http://embed:8081
+      RERANK_URL: http://rerank:8082
+    volumes:
+      - filesdata:/data/files
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  filesdata:

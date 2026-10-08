@@ -1,0 +1,57 @@
+# llama-swap: carrega e descarrega modelos sob demanda no llama-server.
+# Perfil para GPU de 6 GB (RTX 3050 Laptop): um modelo por vez na GPU (grupo "gpu").
+# Os arquivos /models/*.gguf são links criados por scripts/baixar_modelos.sh.
+# Ajuste fino: rode scripts/medir_vram.sh e mantenha o pico abaixo de ~5,6 GB.
+
+healthCheckTimeout: 300   # modelos grandes demoram a carregar na primeira vez
+startPort: 10001
+
+models:
+  # PADRÃO: 4B instruct, todo na GPU. 3 respostas em paralelo x 8K tokens.
+  # ~2,5 GB de pesos + ~1,8 GB de cache (q8) => cerca de 4,5 GB.
+  "chat-4b":
+    cmd: >
+      /app/llama-server --port ${PORT}
+      -m /models/chat-4b.gguf
+      -ngl 99 -c 24576 -np 3
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --jinja
+    ttl: 0   # não descarrega por inatividade
+
+  # 8B: não cabe inteiro em 6 GB. -ngl 28 deixa ~8 camadas na CPU (mais lento).
+  # Suba o -ngl até a VRAM chegar perto do limite; 1 resposta por vez.
+  "chat-8b":
+    cmd: >
+      /app/llama-server --port ${PORT}
+      -m /models/chat-8b.gguf
+      -ngl 28 -c 8192 -np 1
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --jinja --reasoning-budget 0
+    ttl: 600
+
+  # MoE 30B (3B ativos): especialistas na RAM (64 GB), atenção na GPU.
+  # --n-cpu-moe 48 = todos os especialistas na CPU (seguro para 6 GB).
+  # Diminua aos poucos (44, 40...) enquanto a VRAM permitir: fica mais rápido.
+  "chat-moe-30b":
+    cmd: >
+      /app/llama-server --port ${PORT}
+      -m /models/chat-moe-30b.gguf
+      -ngl 99 --n-cpu-moe 48 -c 16384 -np 1
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --jinja --reasoning-budget 0
+    ttl: 600
+
+  # Visão (OCR interativo): Qwen2.5-VL 3B (~3 GB)
+  "vision-3b":
+    cmd: >
+      /app/llama-server --port ${PORT}
+      -m /models/vision-3b.gguf
+      --mmproj /models/vision-3b-mmproj.gguf
+      -ngl 99 -c 8192 -np 1
+    ttl: 300
+
+groups:
+  gpu:
+    swap: true        # só um membro carregado por vez
+    exclusive: true
+    members: ["chat-4b", "chat-8b", "chat-moe-30b", "vision-3b"]
