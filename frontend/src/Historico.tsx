@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { api, baixar } from "./api";
 
 type Agg = {
   perguntas: number;
@@ -11,14 +12,16 @@ type Agg = {
 };
 type Metrics = {
   dias: number;
-  totais: Agg & { erros: number };
+  totais: Agg & { erros: number; uteis: number; nao_uteis: number; conversas: number };
   por_modelo: (Agg & { modelo: string })[];
+  por_usuario?: { usuario: string; perguntas: number; tokens_in: number; tokens_out: number; latencia_media_ms: number | null; ultimo_uso: string | null }[];
   por_dia: { dia: string; perguntas: number; tokens_in: number; tokens_out: number }[];
   por_hora: { hora: number; perguntas: number }[];
 };
 type Item = {
   id: string;
   criada_em: string;
+  usuario: string;
   modelo: string | null;
   pergunta: string | null;
   resposta: string;
@@ -29,6 +32,8 @@ type Item = {
   tokens_por_s: number | null;
   erro: string | null;
   interrompido: boolean;
+  feedback: number | null;
+  feedback_comentario: string | null;
 };
 
 const PAGE = 50;
@@ -42,9 +47,11 @@ const fmtMs = (v: number | null | undefined) => {
 const fmtData = (iso: string) =>
   new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
-export default function Historico() {
+export default function Historico({ admin }: { admin: boolean }) {
   const [dias, setDias] = useState(30);
   const [modelo, setModelo] = useState("");
+  const [usuario, setUsuario] = useState("");
+  const [logins, setLogins] = useState<string[]>([]);
   const [busca, setBusca] = useState("");
   const [buscaAplicada, setBuscaAplicada] = useState("");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -56,20 +63,29 @@ export default function Historico() {
   const filtroQS = () => {
     const p = new URLSearchParams();
     if (modelo) p.set("modelo", modelo);
+    if (usuario) p.set("usuario", usuario);
     if (buscaAplicada) p.set("q", buscaAplicada);
     return p;
   };
 
   useEffect(() => {
-    fetch(`/api/metrics?dias=${dias}`)
-      .then((r) => r.json())
+    if (!admin) return;
+    api<{ login: string }[]>("/api/admin/users")
+      .then((us) => setLogins(us.map((u) => u.login)))
+      .catch(() => setLogins([]));
+  }, [admin]);
+
+  useEffect(() => {
+    const p = new URLSearchParams({ dias: String(dias) });
+    if (usuario) p.set("usuario", usuario);
+    api<Metrics>(`/api/metrics?${p}`)
       .then(setMetrics)
       .catch(() => setMetrics(null));
-  }, [dias]);
+  }, [dias, usuario]);
 
   useEffect(() => {
     carregar(true);
-  }, [modelo, buscaAplicada]);
+  }, [modelo, usuario, buscaAplicada]);
 
   async function carregar(reiniciar: boolean) {
     setCarregando(true);
@@ -77,7 +93,7 @@ export default function Historico() {
     p.set("limit", String(PAGE));
     p.set("offset", String(reiniciar ? 0 : itens.length));
     try {
-      const novos: Item[] = await fetch(`/api/history?${p}`).then((r) => r.json());
+      const novos = await api<Item[]>(`/api/history?${p}`);
       setItens((cur) => (reiniciar ? novos : [...cur, ...novos]));
       setFim(novos.length < PAGE);
     } finally {
@@ -86,7 +102,7 @@ export default function Historico() {
   }
 
   const t = metrics?.totais;
-  const csvHref = `/api/history.csv?${filtroQS()}`;
+  const colunas = admin ? 10 : 9;
 
   return (
     <div className="hist">
@@ -112,6 +128,19 @@ export default function Historico() {
             ))}
           </select>
         </label>
+        {admin && (
+          <label>
+            Usuário
+            <select value={usuario} onChange={(e) => setUsuario(e.target.value)}>
+              <option value="">Todos</option>
+              {logins.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <form
           className="busca"
           onSubmit={(e) => {
@@ -122,13 +151,12 @@ export default function Historico() {
           <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar nas perguntas e respostas" />
           <button type="submit">Buscar</button>
         </form>
-        <a className="btn" href={csvHref}>
-          Exportar CSV
-        </a>
+        <button onClick={() => baixar(`/api/history.csv?${filtroQS()}`, "historico.csv").catch((e) => alert(e.message))}>Exportar CSV</button>
       </div>
 
       <div className="kpis">
         <Kpi rotulo="Perguntas" valor={fmtNum(t?.perguntas)} />
+        <Kpi rotulo="Conversas" valor={fmtNum(t?.conversas)} />
         <Kpi rotulo="Tokens de entrada" valor={fmtNum(t?.tokens_in)} />
         <Kpi rotulo="Tokens de saída" valor={fmtNum(t?.tokens_out)} />
         <Kpi rotulo="Tempo médio de resposta" valor={fmtMs(t?.latencia_media_ms)} />
@@ -136,6 +164,7 @@ export default function Historico() {
         <Kpi rotulo="1º token (médio)" valor={fmtMs(t?.primeiro_token_medio_ms)} />
         <Kpi rotulo="Velocidade média" valor={t?.tokens_por_s ? `${fmtNum(t.tokens_por_s)} tok/s` : "–"} />
         <Kpi rotulo="Erros" valor={fmtNum(t?.erros)} />
+        <Kpi rotulo="Avaliações 👍 / 👎" valor={t ? `${fmtNum(t.uteis)} / ${fmtNum(t.nao_uteis)}` : "–"} />
       </div>
 
       <div className="graficos">
@@ -195,12 +224,52 @@ export default function Historico() {
         </table>
       </div>
 
+      {admin && metrics?.por_usuario && (
+        <>
+          <h3>Por usuário</h3>
+          <div className="tabela-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Usuário</th>
+                  <th className="n">Perguntas</th>
+                  <th className="n">Tokens entrada</th>
+                  <th className="n">Tokens saída</th>
+                  <th className="n">Tempo médio</th>
+                  <th>Último uso</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.por_usuario.map((x) => (
+                  <tr key={x.usuario} className="linha" onClick={() => setUsuario(x.usuario)} title="Filtrar por este usuário">
+                    <td>{x.usuario}</td>
+                    <td className="n">{fmtNum(x.perguntas)}</td>
+                    <td className="n">{fmtNum(x.tokens_in)}</td>
+                    <td className="n">{fmtNum(x.tokens_out)}</td>
+                    <td className="n">{fmtMs(x.latencia_media_ms)}</td>
+                    <td className="data">{x.ultimo_uso ? fmtData(x.ultimo_uso) : "–"}</td>
+                  </tr>
+                ))}
+                {metrics.por_usuario.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="vazio">
+                      Sem perguntas no período.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
       <h3>Histórico de perguntas</h3>
       <div className="tabela-wrap">
         <table className="historico">
           <thead>
             <tr>
               <th>Data/hora</th>
+              {admin && <th>Usuário</th>}
               <th>Modelo</th>
               <th>Pergunta</th>
               <th className="n">Entrada</th>
@@ -208,6 +277,7 @@ export default function Historico() {
               <th className="n">Tempo</th>
               <th className="n">1º token</th>
               <th className="n">tok/s</th>
+              <th>Aval.</th>
             </tr>
           </thead>
           <tbody>
@@ -215,6 +285,7 @@ export default function Historico() {
               <Fragment key={it.id}>
                 <tr className={`linha ${aberto === it.id ? "aberta" : ""}`} onClick={() => setAberto(aberto === it.id ? null : it.id)}>
                   <td className="data">{fmtData(it.criada_em)}</td>
+                  {admin && <td>{it.usuario}</td>}
                   <td>{it.modelo ?? "–"}</td>
                   <td className="perg">
                     {it.erro ? <span className="tag erro">erro</span> : null}
@@ -226,10 +297,11 @@ export default function Historico() {
                   <td className="n">{fmtMs(it.latencia_ms)}</td>
                   <td className="n">{fmtMs(it.primeiro_token_ms)}</td>
                   <td className="n">{fmtNum(it.tokens_por_s)}</td>
+                  <td>{it.feedback === 1 ? "👍" : it.feedback === -1 ? "👎" : ""}</td>
                 </tr>
                 {aberto === it.id && (
                   <tr className="detalhe">
-                    <td colSpan={8}>
+                    <td colSpan={colunas}>
                       <div className="rotulo">Pergunta</div>
                       <div className="texto">{it.pergunta}</div>
                       <div className="rotulo">Resposta</div>
@@ -241,7 +313,7 @@ export default function Historico() {
             ))}
             {!carregando && itens.length === 0 && (
               <tr>
-                <td colSpan={8} className="vazio">
+                <td colSpan={colunas} className="vazio">
                   Nenhuma pergunta encontrada. As perguntas feitas a partir desta versão aparecem aqui.
                 </td>
               </tr>

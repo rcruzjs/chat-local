@@ -114,6 +114,7 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - filesdata:/data/files
+      - ./models:/models:ro   # só leitura: para saber quais modelos já foram baixados
     depends_on:
       db:
         condition: service_healthy
