@@ -103,7 +103,8 @@ docker compose ps
 ### 7. Testar
 
 ```bash
-bash scripts/smoke_test.sh            # chat-4b (padrão)
+bash scripts/smoke_test.sh            # chat-4b (padrão); pede login de admin p/ embed e rerank
+SMOKE_LOGIN=seu-login bash scripts/smoke_test.sh   # já informa o login; só a senha é perguntada
 bash scripts/smoke_test.sh chat-8b
 bash scripts/smoke_test.sh chat-moe-30b
 ```
@@ -157,6 +158,8 @@ docker compose down -v              # APAGA banco e arquivos (recria o esquema n
 | Erro de opção desconhecida no llama-server (`--reasoning-budget`, `--n-cpu-moe`) | Versão da imagem | Atualize: `docker compose pull llm`; se persistir, remova a opção |
 | Falta de memória ao carregar o MoE | WSL com pouca RAM | Confira o `.wslconfig` (`memory=48GB`) e `free -h` no Ubuntu |
 | Primeira resposta muito lenta | Modelo sendo carregado na GPU | Normal na primeira chamada ou após trocar de modelo |
+| Após reiniciar o Windows, um container fica `Exited`/`Created` com erro *"mount a directory onto a file"* | O Docker Desktop subiu antes de o disco do WSL estar acessível e não achou o arquivo de configuração | `bash scripts/religar.sh` recria só os containers com erro. Para rodar sozinho a cada boot: `bash scripts/instalar_religar.sh` (pede sudo uma vez) |
+| `smoke_test.sh` mostra embed/rerank como PULADO | Desde o Sprint 1 essas rotas exigem login de admin | Rode num terminal (ele pergunta login e senha) ou defina `SMOKE_LOGIN` e `SMOKE_SENHA` |
 | `embed` falha com texto longo | Lote menor que o texto | Já configurado com 8192; reduza o tamanho dos chunks |
 
 ## Próximo: Sprint 1
