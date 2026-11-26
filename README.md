@@ -1,10 +1,59 @@
-# Chat LLM Local — Sprint 0 (fundação)
+# Chat LLM Local
 
-Tudo roda no **Ubuntu dentro do WSL2** (Windows 11), com Docker Engine e a GPU NVIDIA.
-Perfil padrão: **RTX 3050 Laptop de 6 GB** (modelo de chat padrão `chat-4b`).
-Ao final deste sprint você tem: modelos servidos pela GPU com troca automática (llama-swap),
-gateway único (LiteLLM), Postgres + pgvector com o esquema completo da Fase 1, Redis, worker,
-backend FastAPI e uma interface de chat com streaming, já instalável como PWA.
+**Uma plataforma de chat multiusuário com LLMs rodando 100% na própria máquina.** Modelos Qwen3
+servidos pela GPU de um notebook, com troca automática entre modelos, login com papéis, histórico
+de conversas e um painel de métricas de uso e desempenho. Nenhuma pergunta ou documento sai do computador.
+
+![Python](https://img.shields.io/badge/Python-FastAPI-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-9%20servi%C3%A7os-2496ED?logo=docker&logoColor=white)
+![GPU](https://img.shields.io/badge/GPU-RTX%203050%206%20GB-76B900?logo=nvidia&logoColor=white)
+
+## Destaques
+
+- **Vários LLMs numa GPU de 6 GB**: o llama-swap carrega um modelo por vez e troca sob demanda (4B, 8B, MoE 30B, visão 3B).
+- **Uma API para todos os modelos**: o gateway LiteLLM expõe o padrão OpenAI. Usar um modelo de nuvem (ex.: Gemini) é descomentar um bloco no `config/litellm.yaml`, sem tocar no código.
+- **Multiusuário de verdade**: login com senha Argon2 + JWT, papéis `admin` / `curador` / `usuario`, e cada usuário só vê os próprios dados.
+- **Observabilidade embutida**: cada resposta grava tempo até o primeiro token, tokens/s, tokens de entrada e saída e o feedback 👍/👎. O painel mostra tudo por modelo, dia, hora e usuário, com exportação CSV.
+- **Instalável no celular** como PWA.
+
+## Desempenho medido
+
+Medianas do uso real registrado no próprio banco (amostra pequena: 9 respostas), numa **RTX 3050 Laptop de 6 GB**:
+
+| Modelo | Arquivo | Onde roda | 1º token | Velocidade |
+|---|---|---|---|---|
+| `chat-4b` (padrão) | Qwen3-4B-Instruct-2507 Q4_K_M | 100% GPU | **0,4 s** | **~50 tokens/s** |
+| `chat-8b` | Qwen3-8B Q4_K_M | GPU + parte na CPU (não cabe em 6 GB) | 1,4 s | ~16 tokens/s |
+
+O 4B é ~3× mais rápido porque cabe inteiro na VRAM; o 8B divide camadas com a CPU. Esse é o tipo
+de troca (qualidade × velocidade) que o painel de métricas ajuda a decidir.
+
+## Arquitetura
+
+```mermaid
+flowchart LR
+    W[React PWA<br/>:3000] --> A[FastAPI<br/>:8000]
+    A --> DB[(PostgreSQL 16<br/>+ pgvector)]
+    A --> R[(Redis)] --> K[Worker Arq]
+    A --> G[Gateway LiteLLM<br/>API OpenAI :4000]
+    G --> S[llama-swap :8080<br/>1 modelo por vez na GPU]
+    S --> M1[chat-4b] & M2[chat-8b] & M3[chat-moe-30b] & M4[vision-3b]
+    A --> E[BGE-M3<br/>embeddings CPU]
+    A --> RR[bge-reranker<br/>CPU]
+```
+
+## Status
+
+| Fase | Entregue |
+|---|---|
+| **Sprint 0: fundação** | 9 serviços em Docker, modelos na GPU com troca automática, gateway, esquema do banco (14 tabelas), chat com streaming, PWA |
+| **Sprint 1: multiusuário** | Login, papéis, painel de admin (usuários e modelos), conversas por usuário, aba Histórico com métricas e CSV, feedback |
+| **Sprint 2: base de conhecimento (RAG)** | 🚧 **Em andamento.** Prontos: embeddings BGE-M3 (1024 dim.), reranker e as tabelas `documents`/`chunks` com pgvector. Falta: ingestão de documentos e busca integrada ao chat |
+| **Próximos** | OCR de documentos, memória de longo prazo, acesso pelo celular (Tailscale + HTTPS) |
+
+---
 
 ## O que sobe
 
@@ -24,7 +73,7 @@ Todas as portas ficam em `127.0.0.1`. O acesso pelo celular (Tailscale + HTTPS) 
 
 ---
 
-## Passo a passo
+## Instalação (passo a passo)
 
 ### 1. No Windows (uma vez)
 
@@ -127,12 +176,12 @@ primeiro token para `chat-4b`, `chat-8b` e `chat-moe-30b`.
 
 ---
 
-## Critérios de aceite do Sprint 0
+## Verificação da instalação
 
-- [ ] `docker compose ps` com todos os serviços em execução
-- [ ] `scripts/smoke_test.sh` sem falhas
-- [ ] Chat respondendo com streaming em http://localhost:3000
-- [ ] VRAM, tokens/s e primeiro token medidos para os três modelos de chat
+- `docker compose ps` com todos os serviços em execução
+- `bash scripts/smoke_test.sh` sem falhas
+- Chat respondendo com streaming em http://localhost:3000
+- Tempo até o primeiro token e tokens/s visíveis abaixo de cada resposta e na aba Histórico
 
 ## Comandos úteis
 
@@ -162,7 +211,10 @@ docker compose down -v              # APAGA banco e arquivos (recria o esquema n
 | `smoke_test.sh` mostra embed/rerank como PULADO | Desde o Sprint 1 essas rotas exigem login de admin | Rode num terminal (ele pergunta login e senha) ou defina `SMOKE_LOGIN` e `SMOKE_SENHA` |
 | `embed` falha com texto longo | Lote menor que o texto | Já configurado com 8192; reduza o tamanho dos chunks |
 
-## Próximo: Sprint 1
+## Projetos relacionados
 
-Login multiusuário com papéis, gravação do log completo (`messages`), conversas por usuário
-e seletor de modelo lendo o registro `llm_models`.
+- [nlp-sql](https://github.com/rcruzjs/nlp-sql): perguntas em português viram SQL no PostgreSQL, usando os modelos servidos por este projeto.
+
+## Autor
+
+**Ricardo Cruz**: dados, Machine Learning e engenharia de IA.
